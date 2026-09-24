@@ -8,6 +8,7 @@ from backend.api import ok, err, require_auth, require_admin, get_current_user
 from backend.storage import read_json, atomic_write_json, list_files
 from backend.utils import now_iso, gen_id, frozen_now
 from backend.judge.ranking import contest_status, contest_elapsed, reset_contest_scores
+from backend.judge.ranking import _problem_exists
 
 contests_bp = Blueprint("contests", __name__)
 
@@ -16,10 +17,20 @@ def _load(contest_id):
     return read_json(os.path.join(config.CONTESTS_DIR, f"{contest_id}.json"))
 
 
+def _valid_problems(c):
+    """竞赛中题目文件仍存在的题目列表（过滤掉已被删除的题目）。"""
+    return [
+        p for p in c.get("problems", [])
+        if _problem_exists(p.get("problem_id") if isinstance(p, dict) else p)
+    ]
+
+
 def _decorate(c):
     if not c:
         return None
     out = dict(c)
+    # 读取时兜底：已删除题目的引用不展示，题目数与详情保持一致
+    out["problems"] = _valid_problems(out)
     out["status"] = contest_status(c)
     out["elapsed"] = contest_elapsed(c)
     out["frozen_now"] = frozen_now(c)

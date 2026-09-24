@@ -104,7 +104,7 @@ def truncate(s, n=8000):
 
 def prob_key(sub):
     """返回提交对应的题目标识。"""
-    return sub.get("id")
+    return sub.get("problem_id") or sub.get("id")
 
 
 def strip_code(sub):

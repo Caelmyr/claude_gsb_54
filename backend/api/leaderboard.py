@@ -33,6 +33,12 @@ def leaderboard(contest_id):
     data["freeze_enabled"] = contest.get("freeze_enabled", False)
     data["mode"] = contest.get("mode", "acm")
     data["contest_title"] = contest.get("title", "")
-    data["contest_problems"] = contest.get("problems", [])
+    # 只返回仍存在且挂在本竞赛下的题目列，避免榜单出现已删除题目
+    contest_problems = []
+    for p in contest.get("problems", []):
+        pid = p.get("problem_id")
+        if pid and os.path.exists(os.path.join(config.PROBLEMS_DIR, f"{pid}.json")):
+            contest_problems.append(p)
+    data["contest_problems"] = contest_problems
     data["me"] = user_key(request.user)
     return ok(data)

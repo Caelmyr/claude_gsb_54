@@ -160,11 +160,38 @@ def delete_problem(problem_id):
     p = os.path.join(config.PROBLEMS_DIR, f"{problem_id}.json")
     if not os.path.exists(p):
         return err("题目不存在", 404)
+
+    affected = _detach_from_contests(problem_id)
+
     os.remove(p)
     t = _testcases_path(problem_id)
     if os.path.exists(t):
         os.remove(t)
-    return ok()
+
+    # 清理相关竞赛的成绩分片与榜单（含封榜快照），避免榜单残留已删题目列
+    from backend.judge.ranking import remove_problem
+    remove_problem(problem_id, affected)
+    return ok({"detached_contests": affected})
+
+
+def _detach_from_contests(problem_id):
+    """把题目从所有引用它的竞赛题目列表中移除，返回受影响的竞赛 ID 列表。"""
+    affected = []
+    for cid in list_files(config.CONTESTS_DIR):
+        path = os.path.join(config.CONTESTS_DIR, f"{cid}.json")
+        c = read_json(path)
+        if not c:
+            continue
+        problems = c.get("problems", [])
+        remaining = [x for x in problems if x.get("problem_id") != problem_id]
+        if len(remaining) != len(problems):
+            # 删除后重新编号，保证 order 连续
+            for i, x in enumerate(remaining):
+                x["order"] = i + 1
+            c["problems"] = remaining
+            atomic_write_json(path, c)
+            affected.append(cid)
+    return affected
 
 
 @problems_bp.get("/problems/<problem_id>/testcases")

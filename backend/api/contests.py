@@ -20,6 +20,13 @@ def _decorate(c):
     if not c:
         return None
     out = dict(c)
+    # 只列出题目文件仍存在的题（防止历史数据残留已删除题目）
+    valid_problems = []
+    for i, p in enumerate(out.get("problems", [])):
+        pid = p.get("problem_id")
+        if pid and os.path.exists(os.path.join(config.PROBLEMS_DIR, f"{pid}.json")):
+            valid_problems.append(p)
+    out["problems"] = valid_problems
     out["status"] = contest_status(c)
     out["elapsed"] = contest_elapsed(c)
     out["frozen_now"] = frozen_now(c)

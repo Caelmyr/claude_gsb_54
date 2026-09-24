@@ -43,6 +43,9 @@ def create_submission():
             return err("竞赛尚未开始", 400)
         if not contest.get("visble", True) and request.user.get("role") != "admin":
             return err("竞赛不存在", 404)
+        contest_pids = {p.get("problem_id") for p in contest.get("problems", [])}
+        if problem_id not in contest_pids:
+            return err("该题目不在此竞赛中", 400)
         if contest.get("mode") == "acm" and request.user.get("role") != "admin":
             pass  # ACM 也允许提交，评分逻辑已在后端处理
     else:

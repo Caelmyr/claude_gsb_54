@@ -99,6 +99,37 @@ def _sort_key(row, mode):
     return (-row["score"], row["total_time_ms"], row["user_id"])
 
 
+def _existing_problem_ids():
+    """磁盘上当前真实存在的题目 ID 集合。"""
+    return set(list_files(config.PROBLEMS_DIR))
+
+
+def _sanitize_rows(rows, valid_ids):
+    """剔除榜单行中已不在竞赛/已删除的题目列，并重算汇总指标与名次。"""
+    cleaned = []
+    for r in rows or []:
+        probs = {pid: p for pid, p in (r.get("problems") or {}).items()
+                 if pid in valid_ids}
+        r = dict(r)
+        r["problems"] = probs
+        summary = _summarize({"user_id": r.get("user_id", ""), "problems": probs},
+                             None, 0)
+        r["solved"] = summary["solved"]
+        r["score"] = summary["score"]
+        r["penalty"] = summary["penalty"]
+        r["total_time_ms"] = summary["total_time_ms"]
+        cleaned.append(r)
+    return cleaned
+
+
+def _resort(rows, mode):
+    """按评分模式重新排序并写入名次。"""
+    rows.sort(key=lambda r: _sort_key(r, mode))
+    for i, r in enumerate(rows):
+        r["rank"] = i + 1
+    return rows
+
+
 def _rebuild_ranking(contest_id, mode, penalty_seconds):
     """重建聚合榜单（扫描该竞赛全部分片并排序）。"""
     d = _score_dir(contest_id)
@@ -217,17 +248,23 @@ def get_leaderboard(contest, as_admin=False):
     """获取榜单。封榜期间非管理员看到冻结快照。"""
     path = _ranking_path(contest["id"])
     data = read_json(path)
+    mode = contest.get("mode", "acm")
+    # 只保留仍挂在本竞赛且题目文件仍存在的列（防御历史脏数据/并发删除）
+    existing = _existing_problem_ids()
+    valid_ids = {p.get("problem_id") for p in contest.get("problems", [])
+                 if p.get("problem_id") in existing}
     if data is None:
-        return {"contest_id": contest["id"], "rows": [], "frozen": False,
+        return {"contest_id": contest["id"], "mode": mode, "rows": [], "frozen": False,
                 "frozen_at": None, "updated_at": None}
     frozen = is_frozen(contest)
     rows = data.get("rows", [])
     if frozen and not as_admin:
         snap = data.get("frozen_snapshot")
         rows = snap if snap is not None else []
+    rows = _resort(_sanitize_rows(rows, valid_ids), mode)
     return {
         "contest_id": contest["id"],
-        "mode": contest.get("mode", "acm"),
+        "mode": mode,
         "rows": rows,
         "frozen": frozen,
         "frozen_at": data.get("frozen_at"),
@@ -245,3 +282,50 @@ def reset_contest_scores(contest_id):
     import shutil
     shutil.rmtree(_score_dir(contest_id), ignore_errors=True)
     os.makedirs(_score_dir(contest_id), exist_ok=True)
+
+
+def remove_problem(problem_id, contest_ids):
+    """题目被删除后，清理所有引用它的成绩分片并重算榜单。
+
+    - 从每个相关竞赛用户分片的 problems 中移除该题，solved/score/penalty 随之剔除；
+    - 重建聚合榜单；若榜单已封榜，同步从冻结快照中移除该列并重排名次，
+      避免封榜后删除题目导致快照与真实成绩不一致。
+    """
+    existing = _existing_problem_ids()
+    for contest_id in contest_ids:
+        contest = read_json(os.path.join(config.CONTESTS_DIR, f"{contest_id}.json"))
+        if contest is None:
+            continue
+        mode = contest.get("mode", "acm")
+        penalty_seconds = int(config.DEFAULT_SETTINGS["ranking"]["penalty_seconds"])
+        d = _score_dir(contest_id)
+        if not os.path.isdir(d):
+            continue
+
+        def _drop(rec):
+            if rec and problem_id in rec.get("problems", {}):
+                rec["problems"].pop(problem_id, None)
+            return rec
+
+        for name in list_files(d):
+            if name == "ranking":
+                continue
+            locked_update(os.path.join(d, name + ".json"), _drop, default=None)
+
+        # 先剔除冻结快照中的该题列，再让 _rebuild_ranking 保留清理后的快照
+        valid_ids = {p.get("problem_id") for p in contest.get("problems", [])
+                     if p.get("problem_id") in existing}
+
+        def _clean_snapshot(data):
+            if data is None:
+                return data
+            snap = data.get("frozen_snapshot")
+            if snap is not None:
+                data["frozen_snapshot"] = _resort(
+                    _sanitize_rows(snap, valid_ids), mode
+                )
+            return data
+
+        locked_update(_ranking_path(contest_id), _clean_snapshot, default=None)
+        ranking = _rebuild_ranking(contest_id, mode, penalty_seconds)
+        locked_update(_ranking_path(contest_id), lambda _d: ranking, default=ranking)

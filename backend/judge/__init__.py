@@ -253,19 +253,21 @@ class JudgeEngine:
                        compile_result["message"], max_time, max_mem)
         shutil.rmtree(workdir, ignore_errors=True)
 
-        # 4) 增量更新排行榜
+        # 4) 增量更新排行榜（题目已删除或已移出竞赛时不再计分）
         if contest is not None and contest.get("visble", True):
-            user = {"id": user_id, "username": sub.get("username", ""),
-                    "nickname": sub.get("nickname", "")}
-            try:
-                ranking.record_submission(contest, user, prob_key(sub), {
-                    "status": final_status,
-                    "score": total_score,
-                    "time_ms": 0,
-                    "memory_kb": max_mem,
-                })
-            except Exception:
-                pass
+            contest_pids = {p.get("problem_id") for p in contest.get("problems", [])}
+            if prob_key(sub) in contest_pids:
+                user = {"id": user_id, "username": sub.get("username", ""),
+                        "nickname": sub.get("nickname", "")}
+                try:
+                    ranking.record_submission(contest, user, prob_key(sub), {
+                        "status": final_status,
+                        "score": total_score,
+                        "time_ms": 0,
+                        "memory_kb": max_mem,
+                    })
+                except Exception:
+                    pass
 
         # 5) 防作弊检测
         self._anti_cheat(sub_id)
